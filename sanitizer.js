@@ -1,5 +1,5 @@
 /**
- * Copyright 2014 IBM Corp.
+ * Copyright 2015 Nikhil Mahendra.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,55 +14,98 @@
  * limitations under the License.
  **/
 
-// If you use this as a template, update the copyright with your own name.
-
-// Sample Node-RED node file
-
+/*** Code template referenced from Node-RED's default 'switch' module as mentioned in Sanitizer Node's Specifications. ***/
 
 module.exports = function(RED) {
-    "use strict";
-    // require any external libraries we may need....
-    //var foo = require("foo-library");
+	"use strict";
 
-    // The main node definition - most things happen in here
-    function SampleNode(n) {
-        // Create a RED node
-        RED.nodes.createNode(this,n);
+	// Operator functions to check the payload data as per user-configuration
+	var operators = {
+		'eq': function(a, b) { return a == b; },
+		'neq': function(a, b) { return a != b; },
+		'lt': function(a, b) { return a < b; },
+		'lte': function(a, b) { return a <= b; },
+		'gt': function(a, b) { return a > b; },
+		'gte': function(a, b) { return a >= b; },
+		'btwn': function(a, b, c) { return a >= b && a <= c; },
+		'cont': function(a, b) { return (a + "").indexOf(b) != -1; },
+		'regex': function(a, b) { return (a + "").match(new RegExp(b)); },
+		'true': function(a) { return a === true; },
+		'false': function(a) { return a === false; },
+		'null': function(a) { return (typeof a == "undefined" || a === null); },
+		'nnull': function(a) { return (typeof a != "undefined" && a !== null); },
+		'else': function(a) { return a === true; }
+	};
 
-        // Store local copies of the node configuration (as defined in the .html)
-        this.topic = n.topic;
+	function SanitizerNode(n) {
+		//Creating Sanitizer Node
+		RED.nodes.createNode(this,n);
 
-        // copy "this" object in case we need it in context of callbacks of other functions.
-        var node = this;
+		// Obtain node's configuration values
+		this.rules = n.rules || [];
+		this.property = n.property;
+		this.checkall = n.checkall || "true";
+		var propertyParts = (n.property || "payload").split(".");
+		var node = this;
 
-        // Do whatever you need to do in here - declare callbacks etc
-        // Note: this sample doesn't do anything much - it will only send
-        // this message once at startup...
-        // Look at other real nodes for some better ideas of what to do....
-        var msg = {};
-        msg.topic = this.topic;
-        msg.payload = "Hello world !";
+		for (var i=0; i<this.rules.length; i+=1) {
+			var rule = this.rules[i];
+			if (!isNaN(Number(rule.v))) {
+				rule.v = Number(rule.v);
+				rule.v2 = Number(rule.v2);
+			}
+		}
 
-        // send out the message to the rest of the workspace.
-        // ... this message will get sent at startup so you may not see it in a debug node.
-        this.send(msg);
+			// Verify JSON input payload
+			this.on('input', function (msg) {
+			if (msg.hasOwnProperty("payload")) 
+			{
+				if(typeof msg.payload === "string") {
+					var len = msg.payload.length;
+					try {
+						msg.payload = JSON.parse(msg.payload);
+					} catch(e) {
+						node.error("Payload JSON parse failed");
+						msg.payload = JSON.stringify(msg.payload);
+						msg.payload = JSON.parse(msg.payload);
+					}
+				}
+			}
 
-        // respond to inputs....
-        this.on('input', function (msg) {
-            node.warn("I saw a payload: "+msg.payload);
-            // in this example just send it straight on... should process it here really
-            node.send(msg);
-        });
+			var onward = [];
+			try {
+				var elseflag = true;
+				for (var i=0; i<node.rules.length; i+=1) {
+					var rule = node.rules[i];
 
-        this.on("close", function() {
-            // Called when the node is shutdown - eg on redeploy.
-            // Allows ports to be closed, connections dropped etc.
-            // eg: node.client.disconnect();
-        });
-    }
+					// If 'length' or 'key/value' of the object is to be checked
+					if (propertyParts == "length") {
+						var test = len;
+					}
+					else
+						var test = msg.payload[propertyParts];
 
-    // Register the node by name. This must be called before overriding any of the
-    // Node functions.
-    RED.nodes.registerType("sample",SampleNode);
+					if (rule.t == "else") { 
+						test = elseflag; 
+						elseflag = true; 
+					}
 
+					if (operators[rule.t](test, rule.v, rule.v2)) {
+						node.warn("Success");
+						onward.push(msg);
+						elseflag = false;
+						if (node.checkall == "false") { break; }
+					} else {
+						node.error("No match");
+						onward.push(null);
+					}
+				}
+				this.send(onward);
+			} catch(err) {
+				node.warn(err);
+			}
+		});
+	}
+	RED.nodes.registerType("sanitizer",SanitizerNode);
 }
+
